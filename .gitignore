@@ -1,0 +1,24 @@
+# --- Секреты: НИКОГДА не коммитим (G-2) ---
+.env
+.env.*
+!.env.example
+
+# --- Python ---
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- IDE ---
+.idea/
+.vscode/
+
+# --- Локальные данные и бэкапы ---
+*.log
+backups/
+*.dump
+*.sql.gz
