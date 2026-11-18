@@ -48,10 +48,10 @@ async def test_registration_preserves_settings_and_rolls_back_errors(
         user = await upsert_user(
             session, telegram_id=1001, first_name="Анна", username="anna"
         )
-        assert user.timezone == "UTC"
+        assert user.timezone == "Europe/Moscow"
         assert user.created_at is not None
         registered_at = user.created_at
-        user.timezone = "Europe/Moscow"
+        user.timezone = "Asia/Yekaterinburg"
         user.is_blocked = True
 
     async with sessions.begin() as session:
@@ -68,7 +68,7 @@ async def test_registration_preserves_settings_and_rolls_back_errors(
         assert user is not None
         assert user.first_name == "Аня"
         assert user.username is None
-        assert user.timezone == "Europe/Moscow"
+        assert user.timezone == "Asia/Yekaterinburg"
         assert user.is_blocked
         assert user.created_at == registered_at
         assert user.terms_version is None
@@ -186,13 +186,14 @@ async def test_task_ownership_delivery_and_profile_deletion(sessions):
 
 @pytest.mark.asyncio
 async def test_plain_text_uses_gemini_before_creating_task(sessions, monkeypatch):
+    from io import BytesIO
     from types import SimpleNamespace
 
     from aiogram import Bot, Dispatcher
     from aiogram.types import Update
     from pydantic import SecretStr
 
-    from bot.handlers import drafts, tasks
+    from bot.handlers import drafts, menu, start, tasks
     from bot.terms_middleware import TermsMiddleware
     from core.services.gemini import TaskDraft
 
@@ -207,13 +208,15 @@ async def test_plain_text_uses_gemini_before_creating_task(sessions, monkeypatch
         user.terms_accepted_at = datetime.now(UTC)
         user.timezone = "Europe/Moscow"
 
-    parse = AsyncMock(side_effect=[
-        TaskDraft(kind="not_task", title="", due_at=None),
-        TaskDraft.model_validate_json(
-            '{"kind":"task","title":"Купить хлеб","due_at":"2026-12-18T18:00:00+03:00"}'
-        ),
-    ])
+    bread_task = TaskDraft.model_validate_json(
+        '{"kind":"task","title":"Купить хлеб","due_at":"2026-12-18T18:00:00+03:00"}'
+    )
+    parse = AsyncMock(side_effect=[TaskDraft(kind="not_task", title="", due_at=None), bread_task, bread_task])
     monkeypatch.setattr(drafts, "parse_task", parse)
+    transcript = "Купить хлеб восемнадцатого декабря в шесть вечера."
+    transcribe = AsyncMock(side_effect=[transcript, ""])
+    monkeypatch.setattr(drafts, "transcribe_voice", transcribe)
+    monkeypatch.setattr(Bot, "download", AsyncMock(side_effect=[BytesIO(b"voice"), BytesIO(b"voice")]))
     send = AsyncMock()
     sender = {"id": 1001, "is_bot": False, "first_name": "Анна"}
     message = {"chat": {"id": 1001, "type": "private"}, "date": 1794981600}
@@ -223,11 +226,26 @@ async def test_plain_text_uses_gemini_before_creating_task(sessions, monkeypatch
     )
     dispatcher.message.outer_middleware(TermsMiddleware())
     dispatcher.callback_query.outer_middleware(TermsMiddleware())
-    dispatcher.include_routers(drafts.router, tasks.router)
+    routers = (start.router, menu.router, drafts.router, tasks.router)
+    dispatcher.include_routers(*routers)
 
     try:
         async with Bot("123456:test") as bot:
             monkeypatch.setattr(bot.session, "make_request", send)
+            for index, text in enumerate(("/start", "Помощь", "Настройки", "Утренний отчёт", "09:15"), 10):
+                await dispatcher.feed_update(bot, Update(
+                    update_id=index,
+                    message={**message, "message_id": index, "from": sender, "text": text},
+                ))
+                response = send.await_args.args[1]
+                if text == "/start":
+                    assert response.reply_markup.keyboard[0][0].text == "Новая задача"
+                elif text == "Помощь":
+                    assert "«Изменить срок»" in response.text
+                elif text == "09:15":
+                    assert "09:15" in response.text
+            parse.assert_not_awaited()
+
             for index, text in enumerate(("Привет!", "Купить хлеб 18 декабря в 6 вечера"), 1):
                 update = Update(
                     update_id=index,
@@ -249,13 +267,60 @@ async def test_plain_text_uses_gemini_before_creating_task(sessions, monkeypatch
                     "data": save_button.callback_data,
                 },
             ))
+            await dispatcher.feed_update(bot, Update(
+                update_id=20,
+                message={**message, "message_id": 20, "from": sender, "text": "Все задачи"},
+            ))
+            listing = send.await_args.args[1]
+            open_button = listing.reply_markup.inline_keyboard[0][0]
+            assert open_button.text.startswith("Открыть №")
+            await dispatcher.feed_update(bot, Update(
+                update_id=21,
+                callback_query={
+                    "id": "open-test", "from": sender, "chat_instance": "test",
+                    "message": {**message, "message_id": 20, "text": listing.text},
+                    "data": open_button.callback_data,
+                },
+            ))
+            assert "Срок: 18.12.2026 18:00" in send.await_args.args[1].text
+            assert parse.await_count == 2
+
+            for index in (30, 32):
+                await dispatcher.feed_update(bot, Update(
+                    update_id=index,
+                    message={
+                        **message, "message_id": index, "from": sender,
+                        "voice": {"file_id": "voice", "file_unique_id": "voice", "duration": 5, "file_size": 5},
+                    },
+                ))
+                prompt = send.await_args.args[1]
+                button = prompt.reply_markup.inline_keyboard[0][0]
+                assert button.text == "Распознать голосовое"
+                await dispatcher.feed_update(bot, Update(
+                    update_id=index + 1,
+                    callback_query={
+                        "id": f"voice-{index}", "from": sender, "chat_instance": "test",
+                        "message": {**message, "message_id": index, "text": prompt.text},
+                        "data": button.callback_data,
+                    },
+                ))
+                response = send.await_args.args[1]
+                if index == 30:
+                    assert f"Распознано: {transcript}" in response.text
+                    assert "Срок: 18.12.2026 18:00" in response.text
+                else:
+                    assert "Не удалось разобрать речь" in response.text
+            assert transcribe.await_count == 2
+            assert parse.await_count == 3
+            assert parse.await_args.kwargs == {"text": transcript}
     finally:
         # Роутеры уровня модуля могут подключаться только к одному диспетчеру.
         dispatcher.sub_routers.clear()
-        drafts.router._parent_router = None
-        tasks.router._parent_router = None
+        for router in routers:
+            router._parent_router = None
 
     async with sessions() as session:
         task = (await session.scalars(select(Task))).one()
         assert (task.title, task.due_at) == ("Купить хлеб", datetime(2026, 12, 18, 15, tzinfo=UTC))
         assert (await session.scalars(select(TaskEvent))).one().task_id == task.id
+        assert (await session.get(User, 1001)).morning_report_time.strftime("%H:%M") == "09:15"

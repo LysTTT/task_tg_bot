@@ -1,5 +1,4 @@
 import asyncio
-from logging.config import fileConfig
 
 from sqlalchemy.engine import Connection
 
@@ -7,6 +6,7 @@ from alembic import context
 
 from core.config import Settings
 from core.database import create_db_engine
+from core.logging_config import setup_logging
 from core.models import Base
 
 # this is the Alembic Config object, which provides
@@ -15,8 +15,7 @@ config = context.config
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
-if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+setup_logging()
 
 # add your model's MetaData object here
 # for 'autogenerate' support

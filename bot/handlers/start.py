@@ -5,9 +5,11 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from aiogram import F, Router
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.filters.callback_data import CallbackData
+from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from bot.menu import HOME, help_text, keyboard
 from core.services.terms import accept_current_terms, get_current_terms
 from core.services.users import delete_user, get_user, upsert_user
 
@@ -22,11 +24,13 @@ class AcceptTerms(CallbackData, prefix="accept_terms"):
 
 @router.message(CommandStart())
 async def start(
-    message: Message, session_factory: async_sessionmaker[AsyncSession]
+    message: Message, session_factory: async_sessionmaker[AsyncSession], state: FSMContext,
 ) -> None:  #!!!!!!
     telegram_user = message.from_user
     if telegram_user is None:
         return
+    await state.set_state(None)
+    await state.update_data(menu_section=HOME, menu_command=None)
 
     async with session_factory.begin() as session:
         user = await upsert_user(
@@ -43,7 +47,10 @@ async def start(
         return
 
     if user.terms_version == terms.version and user.terms_accepted_at is not None:
-        await message.answer(f"{greeting}\n\nНапиши задачу одним сообщением. Обычный текст разбирает Google Gemini.")
+        await message.answer(
+            f"{greeting}\n\nНапиши задачу одним сообщением. Обычный текст разбирает Google Gemini.",
+            reply_markup=keyboard(),
+        )
         return
 
     await message.answer(
@@ -67,24 +74,7 @@ async def start(
 
 @router.message(Command("help"))
 async def show_help(message: Message) -> None:
-    await message.answer(
-        "Команды TaskBot\n\n"
-        "/start — открыть бота и при необходимости принять соглашение.\n"
-        "/terms — открыть действующее соглашение.\n"
-        "/help — показать эту справку.\n"
-        "/settings — посмотреть настройки профиля.\n"
-        "/timezone Europe/Moscow — установить часовой пояс.\n"
-        "/morning 09:00 — задать время утреннего отчёта.\n"
-        "/evening 19:30 — задать время вечернего отчёта.\n\n"
-        "Напиши задачу обычным сообщением. Например, «Купить хлеб 18 декабря в 6 вечера».\n"
-        "Google Gemini выделит название и срок. Проверь их и нажми «Сохранить».\n"
-        "/task 12 — открыть карточку.\n"
-        "/deadline 12 2026-12-01 18:00 — задать срок задачи.\n"
-        "/today, /tomorrow, /week, /overdue, /completed, /all — списки задач.\n"
-        "/search слова — поиск по названию.\n"
-        "/consent — посмотреть сведения о согласии.\n"
-        "/delete_me — удалить профиль и задачи."
-    )
+    await message.answer(help_text())
 
 
 @router.message(Command("settings"))
@@ -124,13 +114,13 @@ async def set_timezone(
 
     timezone = (command.args or "").strip()
     if not timezone:
-        await message.answer("Укажи часовой пояс. Пример: /timezone Europe/Moscow")
+        await message.answer("Укажи часовой пояс, например Europe/Moscow.")
         return
 
     try:
         ZoneInfo(timezone)
     except (ZoneInfoNotFoundError, ValueError):
-        await message.answer("Часовой пояс не найден. Пример: /timezone Europe/Moscow")
+        await message.answer("Часовой пояс не найден. Пример: Europe/Moscow.")
         return
 
     async with session_factory.begin() as session:
@@ -155,7 +145,7 @@ async def set_report_time(
         return
 
     raw_time = (command.args or "").strip()
-    example = f"Введи время в формате ЧЧ:ММ. Пример: /{command.command} 09:00"
+    example = "Введи время в формате ЧЧ:ММ, например 09:00."
     if not re.fullmatch(r"[0-9]{2}:[0-9]{2}", raw_time):
         await message.answer(example)
         return
@@ -239,6 +229,7 @@ async def accept_terms(
     callback: CallbackQuery,
     callback_data: AcceptTerms,
     session_factory: async_sessionmaker[AsyncSession],
+    state: FSMContext,
 ) -> None:
     async with session_factory.begin() as session:
         accepted = await accept_current_terms(
@@ -248,6 +239,10 @@ async def accept_terms(
         )
 
     if accepted:
+        await state.set_state(None)
+        await state.update_data(menu_section=HOME, menu_command=None)
         await callback.answer("Согласие сохранено.")
+        if isinstance(callback.message, Message):
+            await callback.message.answer("Напиши задачу или выбери действие в меню.", reply_markup=keyboard())
     else:
         await callback.answer("Отправь /start, чтобы открыть действующую версию.", show_alert=True)

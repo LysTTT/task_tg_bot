@@ -38,6 +38,11 @@ class TaskAction(CallbackData, prefix="task"):
     status: TaskStatus
 
 
+class TaskNavigation(CallbackData, prefix="task_nav"):
+    action: str
+    number: int
+
+
 def card(task: Task, zone: ZoneInfo) -> str:
     deadline = task.due_at.astimezone(zone).strftime("%d.%m.%Y %H:%M") if task.due_at else "без срока"
     return f"Задача №{task.id}\n{task.title}\nСтатус: {STATUSES[task.status]}\nСрок: {deadline}"
@@ -54,17 +59,21 @@ def keyboard(task: Task) -> InlineKeyboardMarkup:
 
 
 @router.message(Command("task"))
-async def show_task(message: Message, command: CommandObject, session_factory: async_sessionmaker[AsyncSession]):
+async def show_task(
+    message: Message, command: CommandObject, session_factory: async_sessionmaker[AsyncSession],
+    *, user_id: int | None = None,
+):
     try:
         task_id = int(command.args or "")
         if not 0 < task_id < 2**63:
             raise ValueError
     except ValueError:
-        await message.answer("Укажи номер задачи. Пример: /task 12")
+        await message.answer("Укажи номер задачи, например 12.")
         return
+    owner_id = message.from_user.id if user_id is None else user_id
     async with session_factory() as session:
-        user = await get_user(session, message.from_user.id)
-        task = await get_task(session, user_id=message.from_user.id, task_id=task_id)
+        user = await get_user(session, owner_id)
+        task = await get_task(session, user_id=owner_id, task_id=task_id)
     if task is None or user is None:
         await message.answer("Задача не найдена.")
         return
@@ -78,9 +87,9 @@ async def set_deadline(message: Message, command: CommandObject, session_factory
         task_id = int(raw_id)
         if not 0 < task_id < 2**63:
             raise ValueError
-        local_time = None if raw_time == "off" else datetime.strptime(raw_time, "%Y-%m-%d %H:%M")
+        local_time = None if raw_time in ("off", "без срока") else datetime.strptime(raw_time, "%Y-%m-%d %H:%M")
     except ValueError:
-        await message.answer("Пример: /deadline 12 2026-12-01 18:00\nУбрать срок: /deadline 12 off")
+        await message.answer("Укажи номер, дату и время. Пример: 12 2026-12-18 18:00. Убрать срок: 12 без срока.")
         return
     async with session_factory.begin() as session:
         user = await get_user(session, message.from_user.id)
@@ -97,7 +106,10 @@ async def set_deadline(message: Message, command: CommandObject, session_factory
 
 
 @router.message(Command(*LISTS))
-async def list_tasks(message: Message, command: CommandObject, session_factory: async_sessionmaker[AsyncSession]):
+async def list_tasks(
+    message: Message, command: CommandObject, session_factory: async_sessionmaker[AsyncSession],
+    *, user_id: int | None = None,
+):
     mode = command.command
     args = (command.args or "").strip()
     try:
@@ -108,11 +120,12 @@ async def list_tasks(message: Message, command: CommandObject, session_factory: 
         await message.answer(f"Укажи номер страницы. Пример: /{mode} 2")
         return
     if mode == "search" and not args:
-        await message.answer("Пример: /search Купить хлеб")
+        await message.answer("Укажи слово или часть названия задачи, например «хлеб».")
         return
 
+    owner_id = message.from_user.id if user_id is None else user_id
     async with session_factory() as session:
-        user = await get_user(session, message.from_user.id)
+        user = await get_user(session, owner_id)
         if user is None:
             return
         zone = ZoneInfo(user.timezone)
@@ -134,14 +147,45 @@ async def list_tasks(message: Message, command: CommandObject, session_factory: 
         await message.answer("Задач не найдено.")
         return
     lines = [
-        f"/task {task.id} — {' '.join(task.title.split())[:160]} ({STATUSES[task.status]})"
+        f"№{task.id} — {' '.join(task.title.split())[:160]} ({STATUSES[task.status]})"
         for task in tasks[:PAGE_SIZE]
     ]
-    if len(tasks) > PAGE_SIZE and mode != "search":
-        lines.append(f"Следующая страница: /{mode} {page + 1}")
-    elif len(tasks) > PAGE_SIZE:
+    if len(tasks) > PAGE_SIZE and mode == "search":
         lines.append("Уточни запрос, чтобы увидеть меньше результатов.")
-    await message.answer("\n".join(lines))
+    rows = [[InlineKeyboardButton(
+        text=f"Открыть №{task.id}",
+        callback_data=TaskNavigation(action="task", number=task.id).pack(),
+    )] for task in tasks[:PAGE_SIZE]]
+    pages = [
+        InlineKeyboardButton(
+            text=label, callback_data=TaskNavigation(action=mode, number=number).pack(),
+        )
+        for label, number, enabled in (
+            ("Назад", page - 1, page > 1),
+            ("Дальше", page + 1, len(tasks) > PAGE_SIZE and page < 1_000_000),
+        )
+        if enabled and mode != "search"
+    ]
+    if pages:
+        rows.append(pages)
+    await message.answer("\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+
+
+@router.callback_query(TaskNavigation.filter())
+async def navigate_tasks(
+    callback: CallbackQuery, callback_data: TaskNavigation,
+    session_factory: async_sessionmaker[AsyncSession],
+):
+    action = callback_data.action
+    if not isinstance(callback.message, Message) or action not in ("task", *LISTS):
+        await callback.answer("Действие недоступно.", show_alert=True)
+        return
+    await callback.answer()
+    handler = show_task if action == "task" else list_tasks
+    await handler(
+        callback.message, CommandObject(command=action, args=str(callback_data.number)),
+        session_factory, user_id=callback.from_user.id,
+    )
 
 
 @router.callback_query(TaskAction.filter())

@@ -1,5 +1,4 @@
 import asyncio
-from base64 import b64encode
 from datetime import datetime
 from typing import Literal
 
@@ -27,13 +26,8 @@ class TaskDraft(BaseModel):
 
 async def parse_task(
     settings: BotSettings, now: datetime, timezone: str, *,
-    text: str = "", voice: bytes | None = None,
+    text: str,
 ) -> TaskDraft:
-    parts = [{"text": text}] if text else []
-    if voice is not None:
-        parts.append({"inlineData": {
-            "mimeType": "audio/ogg", "data": b64encode(voice).decode("ascii"),
-        }})
     payload = {
         "systemInstruction": {"parts": [{"text": (
             "Определи, содержит ли сообщение конкретное действие, которое надо выполнить. "
@@ -51,7 +45,7 @@ async def parse_task(
             "Если срок указан, но его нельзя однозначно определить по этим правилам, верни "
             "kind=unclear_deadline, название действия и due_at=null."
         )}]},
-        "contents": [{"parts": parts}],
+        "contents": [{"parts": [{"text": text}]}],
         "generationConfig": {
             "responseMimeType": "application/json",
             "responseSchema": {

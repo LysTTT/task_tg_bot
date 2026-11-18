@@ -4,3 +4,6 @@ asyncpg==0.32.0
 alembic==1.20.1
 aiogram==3.31.0
 tzdata==2026.6
+faster-whisper==1.2.1
+# faster-whisper 1.2.1 передаёт в av.open аргумент, удалённый в PyAV 19.
+av==18.1.0

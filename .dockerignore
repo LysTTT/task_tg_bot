@@ -2,4 +2,5 @@
 .env.*
 .git
 .venv
+logs/
 **/__pycache__

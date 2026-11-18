@@ -6,8 +6,15 @@ services:
     environment:
       POSTGRES_HOST: postgres
       POSTGRES_PORT: "5432"
+      HF_HOME: /var/cache/taskbot/huggingface
+    volumes:
+      - whisper_cache:/var/cache/taskbot/huggingface
+      - ./logs:/app/logs
     depends_on:
       postgres:
         condition: service_healthy
     command: ["sh", "-c", "python -m alembic upgrade head && exec python -m bot.main"]
     restart: unless-stopped
+
+volumes:
+  whisper_cache:

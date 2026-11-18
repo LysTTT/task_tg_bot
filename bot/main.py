@@ -7,20 +7,21 @@ from aiogram.fsm.storage.memory import SimpleEventIsolation
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from bot.handlers.drafts import router as drafts_router
+from bot.handlers.menu import router as menu_router
 from bot.handlers.start import router
 from bot.handlers.tasks import router as tasks_router
 from bot.reports import run_reports
 from bot.terms_middleware import TermsMiddleware
 from core.config import BotSettings
 from core.database import create_db_engine
-from core.logging_config import setup_logging
+from core.logging_config import clear_logs_monthly, setup_logging
 
 
 logger = logging.getLogger(__name__) #!!!!!!!!!
 
 
 async def main() -> None:
-    setup_logging()  #!!!!!!
+    log_file = setup_logging()
     settings = BotSettings()
 
     engine = create_db_engine(settings)
@@ -35,11 +36,13 @@ async def main() -> None:
     dispatcher.message.outer_middleware(terms_middleware)
     dispatcher.callback_query.outer_middleware(terms_middleware)
     dispatcher.include_router(router)
+    dispatcher.include_router(menu_router)
     dispatcher.include_router(drafts_router)
     dispatcher.include_router(tasks_router)
 
     logger.info("Запускаем Telegram-бота в режиме polling")
     reports = asyncio.create_task(run_reports(bot, session_factory))
+    log_cleanup = asyncio.create_task(clear_logs_monthly(log_file))
     try:
         await dispatcher.start_polling(
             bot, allowed_updates=["message", "callback_query"], handle_signals=False,
@@ -47,8 +50,10 @@ async def main() -> None:
         )      #!!!!!!!!!!!!!!!!!1
     finally:
         reports.cancel()
-        with suppress(asyncio.CancelledError):
-            await reports
+        log_cleanup.cancel()
+        for task in (reports, log_cleanup):
+            with suppress(asyncio.CancelledError):
+                await task
         await bot.session.close()
         await engine.dispose()
 

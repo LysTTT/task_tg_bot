@@ -1,3 +1,4 @@
+import logging
 from datetime import UTC, datetime
 from time import monotonic
 from uuid import uuid4
@@ -14,9 +15,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from bot.handlers.tasks import card, keyboard
 from core.config import BotSettings
 from core.services.gemini import TaskDraft, parse_task
+from core.services.speech import transcribe_voice
 from core.services.tasks import create_task
 from core.services.users import get_user
 
+logger = logging.getLogger(__name__)
 router = Router()
 router.message.filter(F.chat.type == "private", F.from_user)
 router.callback_query.filter(F.message.chat.type == "private")
@@ -45,7 +48,7 @@ async def pending(callback: CallbackQuery, state: FSMContext) -> dict | None:
 async def prepare_draft(
     message: Message, settings: BotSettings, state: FSMContext,
     session_factory: async_sessionmaker[AsyncSession], *,
-    user_id: int, text: str = "", voice: bytes | None = None,
+    user_id: int, text: str, from_voice: bool = False,
 ) -> None:
     async with session_factory() as session:
         user = await get_user(session, user_id)
@@ -54,7 +57,7 @@ async def prepare_draft(
         return
     zone = ZoneInfo(user.timezone)
     try:
-        draft = await parse_task(settings, datetime.now(zone), user.timezone, text=text, voice=voice)
+        draft = await parse_task(settings, datetime.now(zone), user.timezone, text=text)
     except (ClientError, TimeoutError, ValueError, KeyError, IndexError, TypeError):
         await message.answer("Не удалось разобрать сообщение. Попробуй отправить его ещё раз чуть позже.")
         return
@@ -73,8 +76,12 @@ async def prepare_draft(
         "draft": draft.model_dump_json(),
     })
     deadline = draft.due_at.astimezone(zone).strftime("%d.%m.%Y %H:%M") if draft.due_at else "без срока"
+    transcript = ""
+    if from_voice:
+        preview = text if len(text) <= 3000 else text[:3000] + "…"
+        transcript = f"Распознано: {preview}\n\n"
     await message.answer(
-        f"Черновик\n{draft.title}\nСрок: {deadline}\nПроверь данные и сохрани задачу.",
+        f"{transcript}Черновик\n{draft.title}\nСрок: {deadline}\nПроверь данные и сохрани задачу.",
         reply_markup=buttons("save_ai", nonce, "Сохранить"),
     )
 
@@ -111,8 +118,8 @@ async def offer_voice(message: Message, settings: BotSettings, state: FSMContext
             "nonce": nonce, "expires": monotonic() + DRAFT_LIFETIME, "voice_id": voice.file_id,
         })
         await message.answer(
-            "Для разбора запись будет отправлена в Google Gemini.",
-            reply_markup=buttons("send_voice_ai", nonce, "Отправить в Gemini"),
+            "Бот расшифрует запись локально и отправит полученный текст в Google Gemini.",
+            reply_markup=buttons("send_voice_ai", nonce, "Распознать голосовое"),
         )
 
 
@@ -127,19 +134,31 @@ async def draft_voice(
     if not isinstance(callback.message, Message) or not data.get("voice_id"):
         await callback.answer("Отправь голосовое сообщение заново.", show_alert=True)
         return
-    await callback.answer("Разбираю запись.")
+    await callback.answer("Распознаю голосовое.")
     await state.update_data(ai_task={})
     try:
         stream = await bot.download(data["voice_id"], timeout=10)
-        voice = stream.read(VOICE_LIMIT + 1) if stream else b""
+        voice = b""
+        if stream is not None:
+            with stream:
+                voice = stream.read(VOICE_LIMIT + 1)
     except (TelegramAPIError, TimeoutError):
         voice = b""
     if not 0 < len(voice) <= VOICE_LIMIT:
         await callback.message.answer("Не удалось прочитать запись. Отправь её заново.")
         return
+    try:
+        text = await transcribe_voice(voice)
+    except Exception as error:
+        logger.warning("Ошибка расшифровки голосового: %s", type(error).__name__)
+        await callback.message.answer("Не удалось расшифровать запись. Попробуй ещё раз или напиши задачу текстом.")
+        return
+    if not text:
+        await callback.message.answer("Не удалось разобрать речь. Запиши голосовое ещё раз или напиши задачу текстом.")
+        return
     await prepare_draft(
         callback.message, settings, state, session_factory,
-        user_id=callback.from_user.id, voice=voice,
+        user_id=callback.from_user.id, text=text, from_voice=True,
     )
 
 
