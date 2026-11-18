@@ -46,7 +46,7 @@ def upgrade() -> None:
         sa.Column("telegram_id", sa.BigInteger(), autoincrement=False, nullable=False),
         sa.Column("username", sa.Text(), nullable=True),
         sa.Column("first_name", sa.Text(), nullable=False),
-        sa.Column("timezone", sa.Text(), server_default="UTC", nullable=False),
+        sa.Column("timezone", sa.Text(), server_default="Europe/Moscow", nullable=False),
         sa.Column("morning_report_time", sa.Time(), nullable=True),
         sa.Column("evening_report_time", sa.Time(), nullable=True),
         sa.Column(

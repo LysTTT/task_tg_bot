@@ -1,12 +1,3 @@
-# Инфраструктура для ЛОКАЛЬНОЙ разработки: только база и Redis.
-# Сам бот пока запускаем из PyCharm/.venv. Боевой compose (bot, scheduler,
-# nginx, backup) появится на этапе 11 в папке deploy/.
-#
-# Запуск:     docker compose up -d
-# Статус:     docker compose ps
-# Остановка:  docker compose down        (данные сохраняются в volume)
-# Снести всё: docker compose down -v     (ВНИМАНИЕ: удалит и данные БД)
-
 services:
   postgres:
     image: postgres:18-alpine
@@ -19,11 +10,8 @@ services:
       TZ: UTC
       PGTZ: UTC
     ports:
-      # 127.0.0.1 — порт доступен только с этого компьютера, не из сети
       - "127.0.0.1:${POSTGRES_PORT}:5432"
     volumes:
-      # В образах Postgres 18+ данные лежат в /var/lib/postgresql/<версия>/...,
-      # поэтому монтируем родительскую папку целиком.
       - pg_data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
@@ -35,7 +23,6 @@ services:
     image: redis:8-alpine
     container_name: taskbot-redis
     restart: unless-stopped
-    # appendonly — Redis пишет журнал на диск и не теряет данные при перезапуске
     command: ["redis-server", "--appendonly", "yes"]
     ports:
       - "127.0.0.1:${REDIS_PORT}:6379"

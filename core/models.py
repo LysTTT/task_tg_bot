@@ -51,7 +51,7 @@ class User(Base):
     )
     username: Mapped[str | None] = mapped_column(Text)
     first_name: Mapped[str] = mapped_column(Text)
-    timezone: Mapped[str] = mapped_column(Text, server_default="UTC")
+    timezone: Mapped[str] = mapped_column(Text, server_default="Europe/Moscow")
     morning_report_time: Mapped[time | None] = mapped_column(Time)
     evening_report_time: Mapped[time | None] = mapped_column(Time)
     created_at: Mapped[datetime] = mapped_column(
