@@ -1,0 +1,13 @@
+services:
+  bot:
+    image: taskbot-local
+    build: .
+    env_file: .env
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["sh", "-c", "python -m alembic upgrade head && exec python -m bot.main"]
+    restart: unless-stopped

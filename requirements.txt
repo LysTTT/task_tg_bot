@@ -1,6 +1,6 @@
-# Зависимости проекта. Добавляем по мере прохождения шагов дорожной карты,
-# каждая — с комментарием, зачем она нужна.
-# Установка:  .venv\Scripts\python -m pip install -r requirements.txt
-
-# Чтение настроек из окружения и .env с проверкой типов.
 pydantic-settings==2.16.2
+SQLAlchemy[asyncio]==2.0.57
+asyncpg==0.32.0
+alembic==1.20.1
+aiogram==3.31.0
+tzdata==2026.6

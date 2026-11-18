@@ -17,3 +17,9 @@ class Settings(BaseSettings):
     postgres_db: str = Field(min_length=1)
     postgres_host: str = "127.0.0.1"
     postgres_port: int = Field(default=5432, ge=1, le=65535)
+
+
+class BotSettings(Settings):
+    bot_token: SecretStr = Field(min_length=1)
+    gemini_api_key: SecretStr = SecretStr("")
+    gemini_model: str = Field(default="gemini-3-flash-preview", pattern=r"^[a-zA-Z0-9_.-]+$")
